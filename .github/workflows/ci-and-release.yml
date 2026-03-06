@@ -1,0 +1,112 @@
+name: CI & Release
+
+on:
+  push:
+    branches: ["main", "master"]
+    tags: ["v*"] # 当推送 v1.0.0 这样的标签时触发
+  pull_request:
+    branches: ["main", "master"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true # PR 或新提交时取消旧任务，节省资源；Tag 发布时通常不会冲突
+
+permissions:
+  contents: write # 用于创建 Release
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: zeroclaw # 请确保与 Cargo.toml 中的 [package] name 一致
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_suffix: ""
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_suffix: ".exe"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build Release Binary
+        shell: bash
+        run: |
+          echo "🚀 Building for ${{ matrix.target }}..."
+          cargo build --release --locked --target ${{ matrix.target }}
+
+          BIN_PATH="target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${{ matrix.binary_suffix }}"
+          ls -lh "$BIN_PATH"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}${{ matrix.binary_suffix }}
+          retention-days: 1
+
+  publish:
+    name: Publish to GitHub Releases
+    needs: [build]
+    runs-on: ubuntu-latest
+
+    # 👇 关键逻辑：只有当触发事件是 'push' 且引用是 'tags' 时才运行
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download All Binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate Checksums
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          echo "✅ Checksums generated:"
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## 📦 Release ${{ github.ref_name }}
+
+            Pre-compiled binaries for Linux and Windows.
+
+            ### Checksums
+            ```text
+             $ (cat release-assets/SHA256SUMS)
+            ```
+          draft: false
+          prerelease: false # 如果需要自动识别 beta 版本，可改为逻辑判断
+          files: |
+            release-assets/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
