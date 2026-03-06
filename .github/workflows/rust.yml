@@ -21,7 +21,7 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-action@stable
-      # 如果需要特定版本，可以用 uses: actions-rs/toolchain@v1 with: { toolchain: stable }
+     
 
     - name: Cache Cargo Registry
       uses: actions/cache@v4
