@@ -3218,6 +3218,10 @@ pub struct FeishuConfig {
     /// Allowed user IDs or union IDs (empty = deny all, "*" = allow all)
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// When true, only respond to messages that @-mention the bot in groups.
+    /// Direct messages are always processed.
+    #[serde(default)]
+    pub mention_only: bool,
     /// Event receive mode: "websocket" (default) or "webhook"
     #[serde(default)]
     pub receive_mode: LarkReceiveMode,

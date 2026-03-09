@@ -2914,7 +2914,7 @@ fn collect_configured_channels(
         } else {
             channels.push(ConfiguredChannel {
                 display_name: "Lark",
-                channel: Arc::new(LarkChannel::from_lark_config(lk)),
+                channel: Arc::new(LarkChannel::from_config(lk)),
             });
         }
     }
