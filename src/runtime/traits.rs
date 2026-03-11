@@ -102,10 +102,20 @@ mod tests {
             command: &str,
             workspace_dir: &Path,
         ) -> anyhow::Result<tokio::process::Command> {
-            let mut cmd = tokio::process::Command::new("echo");
-            cmd.arg(command);
-            cmd.current_dir(workspace_dir);
-            Ok(cmd)
+            #[cfg(target_os = "windows")]
+            {
+                let mut cmd = tokio::process::Command::new("cmd");
+                cmd.arg("/C").arg(format!("echo {}", command));
+                cmd.current_dir(workspace_dir);
+                Ok(cmd)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let mut cmd = tokio::process::Command::new("echo");
+                cmd.arg(command);
+                cmd.current_dir(workspace_dir);
+                Ok(cmd)
+            }
         }
     }
 

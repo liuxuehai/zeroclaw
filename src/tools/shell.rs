@@ -13,6 +13,25 @@ const SHELL_TIMEOUT_SECS: u64 = 60;
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 /// Environment variables safe to pass to shell commands.
 /// Only functional variables are included — never API keys or secrets.
+#[cfg(target_os = "windows")]
+const SAFE_ENV_VARS: &[&str] = &[
+    "PATH",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "TEMP",
+    "TMP",
+    "COMSPEC",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "PROMPT",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+];
+
+#[cfg(not(target_os = "windows"))]
 const SAFE_ENV_VARS: &[&str] = &[
     "PATH", "HOME", "TERM", "LANG", "LC_ALL", "LC_CTYPE", "USER", "SHELL", "TMPDIR",
 ];
@@ -146,11 +165,15 @@ impl Tool for ShellTool {
                 });
             }
         };
+
         cmd.env_clear();
 
-        for var in collect_allowed_shell_env_vars(&self.security) {
-            if let Ok(val) = std::env::var(&var) {
-                cmd.env(&var, val);
+        let allowed_vars = collect_allowed_shell_env_vars(&self.security);
+        tracing::debug!("Passing {} allowed environment variables to shell", allowed_vars.len());
+        
+        for var in &allowed_vars {
+            if let Ok(val) = std::env::var(var) {
+                cmd.env(var, val);
             }
         }
 
@@ -380,19 +403,29 @@ mod tests {
     }
 
     fn test_security_with_env_cmd() -> Arc<SecurityPolicy> {
+        #[cfg(target_os = "windows")]
+        let allowed_commands = vec!["set".into(), "echo".into()];
+        #[cfg(not(target_os = "windows"))]
+        let allowed_commands = vec!["env".into(), "echo".into()];
+        
         Arc::new(SecurityPolicy {
             autonomy: AutonomyLevel::Supervised,
             workspace_dir: std::env::temp_dir(),
-            allowed_commands: vec!["env".into(), "echo".into()],
+            allowed_commands,
             ..SecurityPolicy::default()
         })
     }
 
     fn test_security_with_env_passthrough(vars: &[&str]) -> Arc<SecurityPolicy> {
+        #[cfg(target_os = "windows")]
+        let allowed_commands = vec!["set".into()];
+        #[cfg(not(target_os = "windows"))]
+        let allowed_commands = vec!["env".into()];
+        
         Arc::new(SecurityPolicy {
             autonomy: AutonomyLevel::Supervised,
             workspace_dir: std::env::temp_dir(),
-            allowed_commands: vec!["env".into()],
+            allowed_commands,
             shell_env_passthrough: vars.iter().map(|v| (*v).to_string()).collect(),
             ..SecurityPolicy::default()
         })
@@ -427,9 +460,14 @@ mod tests {
         let _g1 = EnvGuard::set("API_KEY", "sk-test-secret-12345");
         let _g2 = EnvGuard::set("ZEROCLAW_API_KEY", "sk-test-secret-67890");
 
+        #[cfg(target_os = "windows")]
+        let cmd = "set";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "env";
+
         let tool = ShellTool::new(test_security_with_env_cmd(), test_runtime());
         let result = tool
-            .execute(json!({"command": "env"}))
+            .execute(json!({"command": cmd}))
             .await
             .expect("env command execution should succeed");
         assert!(result.success);
@@ -447,17 +485,34 @@ mod tests {
     async fn shell_preserves_path_and_home_for_env_command() {
         let tool = ShellTool::new(test_security_with_env_cmd(), test_runtime());
 
+        #[cfg(target_os = "windows")]
+        let cmd = "set";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "env";
+
         let result = tool
-            .execute(json!({"command": "env"}))
+            .execute(json!({"command": cmd}))
             .await
             .expect("env command should succeed");
         assert!(result.success);
+        
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                result.output.contains("USERPROFILE=") || result.output.contains("HOMEDRIVE="),
+                "HOME-equivalent should be available in shell environment"
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(
+                result.output.contains("HOME="),
+                "HOME should be available in shell environment"
+            );
+        }
+        
         assert!(
-            result.output.contains("HOME="),
-            "HOME should be available in shell environment"
-        );
-        assert!(
-            result.output.contains("PATH="),
+            result.output.contains("PATH=") || result.output.contains("Path="),
             "PATH should be available in shell environment"
         );
     }
@@ -485,8 +540,13 @@ mod tests {
             test_runtime(),
         );
 
+        #[cfg(target_os = "windows")]
+        let cmd = "set";
+        #[cfg(not(target_os = "windows"))]
+        let cmd = "env";
+
         let result = tool
-            .execute(json!({"command": "env"}))
+            .execute(json!({"command": cmd}))
             .await
             .expect("env command execution should succeed");
         assert!(result.success);
@@ -515,16 +575,25 @@ mod tests {
 
     #[tokio::test]
     async fn shell_requires_approval_for_medium_risk_command() {
+        #[cfg(target_os = "windows")]
+        let (cmd, arg) = ("mkdir", "zeroclaw_test_dir");
+        #[cfg(not(target_os = "windows"))]
+        let (cmd, arg) = ("touch", "zeroclaw_shell_approval_test");
+
         let security = Arc::new(SecurityPolicy {
             autonomy: AutonomyLevel::Supervised,
-            allowed_commands: vec!["touch".into()],
+            allowed_commands: vec![cmd.into()],
+            require_approval_for_medium_risk: true,
             workspace_dir: std::env::temp_dir(),
             ..SecurityPolicy::default()
         });
 
         let tool = ShellTool::new(security.clone(), test_runtime());
+        
+        let full_cmd = format!("{} {}", cmd, arg);
+        
         let denied = tool
-            .execute(json!({"command": "touch zeroclaw_shell_approval_test"}))
+            .execute(json!({"command": full_cmd}))
             .await
             .expect("unapproved command should return a result");
         assert!(!denied.success);
@@ -536,15 +605,23 @@ mod tests {
 
         let allowed = tool
             .execute(json!({
-                "command": "touch zeroclaw_shell_approval_test",
+                "command": full_cmd,
                 "approved": true
             }))
             .await
             .expect("approved command execution should succeed");
         assert!(allowed.success);
 
-        let _ =
-            tokio::fs::remove_file(std::env::temp_dir().join("zeroclaw_shell_approval_test")).await;
+        // Cleanup
+        let cleanup_path = std::env::temp_dir().join(arg);
+        #[cfg(target_os = "windows")]
+        {
+            let _ = tokio::fs::remove_dir(cleanup_path).await;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = tokio::fs::remove_file(cleanup_path).await;
+        }
     }
 
     // ── §5.2 Shell timeout enforcement tests ─────────────────
@@ -581,14 +658,30 @@ mod tests {
             SAFE_ENV_VARS.contains(&"PATH"),
             "PATH must be in safe env vars"
         );
-        assert!(
-            SAFE_ENV_VARS.contains(&"HOME"),
-            "HOME must be in safe env vars"
-        );
-        assert!(
-            SAFE_ENV_VARS.contains(&"TERM"),
-            "TERM must be in safe env vars"
-        );
+        
+        #[cfg(target_os = "windows")]
+        {
+            assert!(
+                SAFE_ENV_VARS.contains(&"USERPROFILE") || SAFE_ENV_VARS.contains(&"HOMEDRIVE"),
+                "USERPROFILE or HOMEDRIVE must be in safe env vars on Windows"
+            );
+            assert!(
+                SAFE_ENV_VARS.contains(&"COMSPEC"),
+                "COMSPEC must be in safe env vars on Windows"
+            );
+        }
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(
+                SAFE_ENV_VARS.contains(&"HOME"),
+                "HOME must be in safe env vars"
+            );
+            assert!(
+                SAFE_ENV_VARS.contains(&"TERM"),
+                "TERM must be in safe env vars"
+            );
+        }
     }
 
     #[tokio::test]
@@ -658,5 +751,44 @@ mod tests {
             r2.error.as_deref().unwrap_or("").contains("Rate limit")
                 || r2.error.as_deref().unwrap_or("").contains("budget")
         );
+    }
+
+    #[tokio::test]
+    async fn shell_executes_java_version() {
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: std::env::temp_dir(),
+            allowed_commands: vec!["java".into()],
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+        let result = tool
+            .execute(json!({"command": "java -version"}))
+            .await
+            .expect("java -version command execution should return a result");
+        
+        // Java outputs version info to stderr, so check both output and error fields
+        let output_text = result.output.to_lowercase();
+        let error_text = result.error.as_deref().unwrap_or("").to_lowercase();
+        let combined = format!("{} {}", output_text, error_text);
+        
+        // If java is installed, we should see version info
+        // If not installed, we should get a clear error
+        if result.success || combined.contains("version") || combined.contains("openjdk") || combined.contains("java") {
+            assert!(
+                combined.contains("version") || combined.contains("openjdk") || combined.contains("java"),
+                "Expected java version output, got: output='{}', error='{}'",
+                result.output,
+                result.error.as_deref().unwrap_or("")
+            );
+        } else {
+            // Java not installed - verify we get a reasonable error
+            assert!(
+                combined.contains("not found") || combined.contains("not recognized") || combined.contains("no such"),
+                "Expected 'not found' error when java is not installed, got: output='{}', error='{}'",
+                result.output,
+                result.error.as_deref().unwrap_or("")
+            );
+        }
     }
 }

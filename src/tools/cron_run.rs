@@ -231,10 +231,17 @@ mod tests {
             ..Config::default()
         };
         config.autonomy.level = AutonomyLevel::Supervised;
-        config.autonomy.allowed_commands = vec!["touch".into()];
+        config.autonomy.require_approval_for_medium_risk = true;
+        
+        #[cfg(target_os = "windows")]
+        let (cmd, cmd_arg) = ("mkdir", "cron-run-approval-dir");
+        #[cfg(not(target_os = "windows"))]
+        let (cmd, cmd_arg) = ("touch", "cron-run-approval");
+        
+        config.autonomy.allowed_commands = vec![cmd.into()];
         std::fs::create_dir_all(&config.workspace_dir).unwrap();
         let cfg = Arc::new(config);
-        let job = cron::add_job(&cfg, "*/5 * * * *", "touch cron-run-approval").unwrap();
+        let job = cron::add_job(&cfg, "*/5 * * * *", &format!("{} {}", cmd, cmd_arg)).unwrap();
         let tool = CronRunTool::new(cfg.clone(), test_security(&cfg));
 
         let denied = tool.execute(json!({ "job_id": job.id })).await.unwrap();
@@ -248,6 +255,7 @@ mod tests {
             .execute(json!({ "job_id": job.id, "approved": true }))
             .await
             .unwrap();
+        eprintln!("Approved result: success={}, error={:?}", approved.success, approved.error);
         assert!(approved.success, "{:?}", approved.error);
     }
 

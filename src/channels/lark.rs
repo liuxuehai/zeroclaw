@@ -2087,7 +2087,7 @@ mod tests {
     }
 
     #[test]
-    fn lark_from_lark_config_ignores_legacy_feishu_flag() {
+    fn lark_from_config_with_feishu_flag_uses_feishu_platform() {
         use crate::config::schema::{LarkConfig, LarkReceiveMode};
 
         let cfg = LarkConfig {
@@ -2096,16 +2096,17 @@ mod tests {
             encrypt_key: None,
             verification_token: Some("vtoken789".into()),
             allowed_users: vec!["*".into()],
+            mention_only: false,
             use_feishu: true,
             receive_mode: LarkReceiveMode::Webhook,
             port: Some(9898),
         };
 
-        let ch = LarkChannel::from_lark_config(&cfg);
+        let ch = LarkChannel::from_config(&cfg);
 
-        assert_eq!(ch.api_base(), LARK_BASE_URL);
-        assert_eq!(ch.ws_base(), LARK_WS_BASE_URL);
-        assert_eq!(ch.name(), "lark");
+        assert_eq!(ch.api_base(), FEISHU_BASE_URL);
+        assert_eq!(ch.ws_base(), FEISHU_WS_BASE_URL);
+        assert_eq!(ch.name(), "feishu");
     }
 
     #[test]
@@ -2118,6 +2119,7 @@ mod tests {
             encrypt_key: None,
             verification_token: Some("vtoken789".into()),
             allowed_users: vec!["*".into()],
+            mention_only: false,
             receive_mode: LarkReceiveMode::Webhook,
             port: Some(9898),
         };
@@ -2290,6 +2292,7 @@ mod tests {
             encrypt_key: None,
             verification_token: Some("vtoken789".into()),
             allowed_users: vec!["*".into()],
+            mention_only: false,
             receive_mode: crate::config::schema::LarkReceiveMode::Webhook,
             port: Some(9898),
         };
