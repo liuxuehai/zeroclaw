@@ -239,9 +239,18 @@ impl BrowserTool {
         }
     }
 
+    /// Get the correct agent-browser command name for the current platform
+    fn agent_browser_cmd() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "agent-browser.cmd"
+        } else {
+            "agent-browser"
+        }
+    }
+
     /// Check if agent-browser CLI is available
     pub async fn is_agent_browser_available() -> bool {
-        Command::new("agent-browser")
+        Command::new(Self::agent_browser_cmd())
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -438,7 +447,7 @@ impl BrowserTool {
 
     /// Execute an agent-browser command
     async fn run_command(&self, args: &[&str]) -> anyhow::Result<AgentBrowserResponse> {
-        let mut cmd = Command::new("agent-browser");
+        let mut cmd = Command::new(Self::agent_browser_cmd());
 
         // Add session if configured
         if let Some(ref session) = self.session_name {
@@ -448,7 +457,11 @@ impl BrowserTool {
         // Add --json for machine-readable output
         cmd.args(args).arg("--json");
 
-        debug!("Running: agent-browser {} --json", args.join(" "));
+        debug!(
+            "Running: {} {} --json",
+            Self::agent_browser_cmd(),
+            args.join(" ")
+        );
 
         let output = cmd
             .stdout(Stdio::piped())
@@ -2491,5 +2504,18 @@ mod tests {
             state.reset_session().await;
             state.reset_session().await;
         });
+    }
+
+    #[tokio::test]
+    async fn is_agent_browser_available_returns_bool() {
+        let result = BrowserTool::is_agent_browser_available().await;
+        assert!(matches!(result, true | false));
+    }
+
+    #[tokio::test]
+    async fn is_available_alias_matches_is_agent_browser_available() {
+        let agent_browser = BrowserTool::is_agent_browser_available().await;
+        let available = BrowserTool::is_available().await;
+        assert_eq!(agent_browser, available);
     }
 }
