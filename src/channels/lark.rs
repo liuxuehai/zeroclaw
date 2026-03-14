@@ -296,7 +296,7 @@ pub struct LarkChannel {
     /// Bot open_id resolved at runtime via `/bot/v3/info`.
     resolved_bot_open_id: Arc<StdRwLock<Option<String>>>,
     mention_only: bool,
-    /// Platform variant: Lark (international) or Feishu (CN)
+    /// Platform variant: Lark (international) or Feishu (CN).
     platform: LarkPlatform,
     /// How to receive events: WebSocket long-connection or HTTP webhook.
     receive_mode: crate::config::schema::LarkReceiveMode,
@@ -371,8 +371,10 @@ impl LarkChannel {
         ch
     }
 
-    /// Build from `FeishuConfig` (always uses Feishu platform).
-    pub fn from_feishu_config(config: &crate::config::schema::FeishuConfig) -> Self {
+    /// Build from `LarkConfig` forcing `LarkPlatform::Lark`, ignoring the
+    /// legacy `use_feishu` flag.  Used by the channel factory when the config
+    /// section is explicitly `[channels_config.lark]`.
+    pub fn from_lark_config(config: &crate::config::schema::LarkConfig) -> Self {
         let mut ch = Self::new_with_platform(
             config.app_id.clone(),
             config.app_secret.clone(),
@@ -380,6 +382,21 @@ impl LarkChannel {
             config.port,
             config.allowed_users.clone(),
             config.mention_only,
+            LarkPlatform::Lark,
+        );
+        ch.receive_mode = config.receive_mode.clone();
+        ch
+    }
+
+    /// Build from `FeishuConfig` with `LarkPlatform::Feishu`.
+    pub fn from_feishu_config(config: &crate::config::schema::FeishuConfig) -> Self {
+        let mut ch = Self::new_with_platform(
+            config.app_id.clone(),
+            config.app_secret.clone(),
+            config.verification_token.clone().unwrap_or_default(),
+            config.port,
+            config.allowed_users.clone(),
+            false,
             LarkPlatform::Feishu,
         );
         ch.receive_mode = config.receive_mode.clone();

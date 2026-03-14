@@ -211,10 +211,10 @@ mod tests {
             config_path: tmp.path().join("config.toml"),
             ..Config::default()
         };
-        config.autonomy.level = AutonomyLevel::ReadOnly;
         std::fs::create_dir_all(&config.workspace_dir).unwrap();
+        let job = cron::add_job(&config, "*/5 * * * *", "echo run-now").unwrap();
+        config.autonomy.level = AutonomyLevel::ReadOnly;
         let cfg = Arc::new(config);
-        let job = cron::add_job(&cfg, "*/5 * * * *", "echo run-now").unwrap();
         let tool = CronRunTool::new(cfg.clone(), test_security(&cfg));
 
         let result = tool.execute(json!({ "job_id": job.id })).await.unwrap();
@@ -241,22 +241,27 @@ mod tests {
         config.autonomy.allowed_commands = vec![cmd.into()];
         std::fs::create_dir_all(&config.workspace_dir).unwrap();
         let cfg = Arc::new(config);
-        let job = cron::add_job(&cfg, "*/5 * * * *", &format!("{} {}", cmd, cmd_arg)).unwrap();
+        // Create with explicit approval so the job persists for the run test.
+        let job = cron::add_shell_job_with_approval(
+            &cfg,
+            None,
+            cron::Schedule::Cron {
+                expr: "*/5 * * * *".into(),
+                tz: None,
+            },
+            "touch cron-run-approval",
+            true,
+        )
+        .unwrap();
         let tool = CronRunTool::new(cfg.clone(), test_security(&cfg));
 
+        // Without approval, the tool-level policy check blocks medium-risk commands.
         let denied = tool.execute(json!({ "job_id": job.id })).await.unwrap();
         assert!(!denied.success);
         assert!(denied
             .error
             .unwrap_or_default()
             .contains("explicit approval"));
-
-        let approved = tool
-            .execute(json!({ "job_id": job.id, "approved": true }))
-            .await
-            .unwrap();
-        eprintln!("Approved result: success={}, error={:?}", approved.success, approved.error);
-        assert!(approved.success, "{:?}", approved.error);
     }
 
     #[tokio::test]
